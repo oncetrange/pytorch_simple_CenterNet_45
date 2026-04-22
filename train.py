@@ -54,6 +54,22 @@ parser.add_argument('--log_interval', type=int, default=100)
 parser.add_argument('--val_interval', type=int, default=5)
 parser.add_argument('--num_workers', type=int, default=2)
 
+# Heatmap generation
+parser.add_argument('--gaussian_type', type=str, default='isotropic',
+                    choices=['isotropic', 'anisotropic'],
+                    help='isotropic: 原始圆形 Gaussian; anisotropic: 椭圆形，适合细长目标')
+parser.add_argument('--sigma_mode', type=str, default='original',
+                    choices=['original', 'adaptive'],
+                    help='original: sigma=diameter/6; adaptive: 按目标尺寸分段调整 sigma')
+
+# Focal loss hyperparameters (default values reproduce original CornerNet behavior)
+parser.add_argument('--focal_alpha', type=float, default=2.0,
+                    help='正样本调制指数，原始值 2')
+parser.add_argument('--focal_beta', type=float, default=2.0,
+                    help='负样本调制指数，原始值 2')
+parser.add_argument('--focal_gamma', type=float, default=4.0,
+                    help='Gaussian 软标签负样本权重指数，原始值 4')
+
 cfg = parser.parse_args()
 
 os.chdir(cfg.root_dir)
@@ -89,7 +105,8 @@ def main():
 
   print('Setting up data...')
   Dataset = COCO if cfg.dataset == 'coco' else PascalVOC
-  train_dataset = Dataset(cfg.data_dir, 'train', split_ratio=cfg.split_ratio, img_size=cfg.img_size)
+  train_dataset = Dataset(cfg.data_dir, 'train', split_ratio=cfg.split_ratio, img_size=cfg.img_size,
+                          gaussian_type=cfg.gaussian_type, sigma_mode=cfg.sigma_mode)
   train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset,
                                                                   num_replicas=num_gpus,
                                                                   rank=cfg.local_rank)
@@ -145,7 +162,8 @@ def main():
       regs = [_tranpose_and_gather_feature(r, batch['inds']) for r in regs]
       w_h_ = [_tranpose_and_gather_feature(r, batch['inds']) for r in w_h_]
 
-      hmap_loss = _neg_loss(hmap, batch['hmap'])
+      hmap_loss = _neg_loss(hmap, batch['hmap'],
+                            alpha=cfg.focal_alpha, beta=cfg.focal_beta, gamma=cfg.focal_gamma)
       reg_loss = _reg_loss(regs, batch['regs'], batch['ind_masks'])
       w_h_loss = _reg_loss(w_h_, batch['w_h_'], batch['ind_masks'])
       loss = hmap_loss + 1 * reg_loss + 0.1 * w_h_loss

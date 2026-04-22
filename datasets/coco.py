@@ -10,7 +10,7 @@ import pycocotools.coco as coco
 from pycocotools.cocoeval import COCOeval
 
 from utils.image import get_border, get_affine_transform, affine_transform, color_aug
-from utils.image import draw_umich_gaussian, gaussian_radius
+from utils.image import draw_umich_gaussian, draw_anisotropic_gaussian, draw_adaptive_gaussian, gaussian_radius
 
 COCO_NAMES = ['__background__', 'person', 'bicycle', 'car', 'motorcycle', 'airplane',
               'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
@@ -44,7 +44,8 @@ COCO_EIGEN_VECTORS = [[-0.58752847, -0.69563484, 0.41340352],
 
 
 class COCO(data.Dataset):
-  def __init__(self, data_dir, split, split_ratio=1.0, img_size=512):
+  def __init__(self, data_dir, split, split_ratio=1.0, img_size=512,
+               gaussian_type='isotropic', sigma_mode='original'):
     super(COCO, self).__init__()
     self.num_classes = 80
     self.class_name = COCO_NAMES
@@ -72,6 +73,8 @@ class COCO(data.Dataset):
     self.fmap_size = {'h': img_size // self.down_ratio, 'w': img_size // self.down_ratio}
     self.rand_scales = np.arange(0.6, 1.4, 0.1)
     self.gaussian_iou = 0.7
+    self.gaussian_type = gaussian_type  # 'isotropic' | 'anisotropic'
+    self.sigma_mode = sigma_mode        # 'original' | 'adaptive'
 
     print('==> initializing coco 2017 %s data.' % split)
     self.coco = coco.COCO(self.annot_path)
@@ -163,8 +166,17 @@ class COCO(data.Dataset):
         obj_c = np.array([(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2], dtype=np.float32)
         obj_c_int = obj_c.astype(np.int32)
 
-        radius = max(0, int(gaussian_radius((math.ceil(h), math.ceil(w)), self.gaussian_iou)))
-        draw_umich_gaussian(hmap[label], obj_c_int, radius)
+        r_base = gaussian_radius((math.ceil(h), math.ceil(w)), self.gaussian_iou)
+        radius = max(0, int(r_base))
+        if self.gaussian_type == 'anisotropic':
+          max_dim = max(h, w) + 1e-6
+          rx = max(0, int(r_base * w / max_dim))
+          ry = max(0, int(r_base * h / max_dim))
+          draw_anisotropic_gaussian(hmap[label], obj_c_int, rx, ry)
+        elif self.sigma_mode == 'adaptive':
+          draw_adaptive_gaussian(hmap[label], obj_c_int, radius)
+        else:
+          draw_umich_gaussian(hmap[label], obj_c_int, radius)
         w_h_[k] = 1. * w, 1. * h
         regs[k] = obj_c - obj_c_int  # discretization error
         inds[k] = obj_c_int[1] * self.fmap_size['w'] + obj_c_int[0]

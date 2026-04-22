@@ -142,6 +142,57 @@ def draw_umich_gaussian(heatmap, center, radius, k=1):
   return heatmap
 
 
+def gaussian2D_anisotropic(h, w, sigma_x, sigma_y):
+  m, n = (h - 1.) / 2., (w - 1.) / 2.
+  y, x = np.ogrid[-m:m + 1, -n:n + 1]
+  kernel = np.exp(-(x * x / (2 * sigma_x ** 2) + y * y / (2 * sigma_y ** 2)))
+  kernel[kernel < np.finfo(kernel.dtype).eps * kernel.max()] = 0
+  return kernel
+
+
+def draw_anisotropic_gaussian(heatmap, center, radius_x, radius_y, k=1):
+  """各向异性 Gaussian：x/y 方向使用不同半径，适合细长目标。"""
+  sigma_x = (2 * radius_x + 1) / 6
+  sigma_y = (2 * radius_y + 1) / 6
+  gaussian = gaussian2D_anisotropic(2 * radius_y + 1, 2 * radius_x + 1, sigma_x, sigma_y)
+
+  x, y = int(center[0]), int(center[1])
+  H, W = heatmap.shape[:2]
+
+  left, right = min(x, radius_x), min(W - x, radius_x + 1)
+  top, bottom = min(y, radius_y), min(H - y, radius_y + 1)
+
+  mh = heatmap[y - top:y + bottom, x - left:x + right]
+  mg = gaussian[radius_y - top:radius_y + bottom, radius_x - left:radius_x + right]
+  if min(mg.shape) > 0 and min(mh.shape) > 0:
+    np.maximum(mh, mg * k, out=mh)
+  return heatmap
+
+
+def draw_adaptive_gaussian(heatmap, center, radius, k=1):
+  """自适应 sigma：根据目标尺寸分段调整 sigma 系数。"""
+  if radius <= 4:
+    factor = 4    # 小目标：宽泛 sigma，增强稀疏训练信号
+  elif radius <= 16:
+    factor = 6    # 中目标：原始行为
+  else:
+    factor = 8    # 大目标：收紧 sigma，保持中心点尖锐性
+  diameter = 2 * radius + 1
+  gaussian = gaussian2D((diameter, diameter), sigma=diameter / factor)
+
+  x, y = int(center[0]), int(center[1])
+  H, W = heatmap.shape[:2]
+
+  left, right = min(x, radius), min(W - x, radius + 1)
+  top, bottom = min(y, radius), min(H - y, radius + 1)
+
+  mh = heatmap[y - top:y + bottom, x - left:x + right]
+  mg = gaussian[radius - top:radius + bottom, radius - left:radius + right]
+  if min(mg.shape) > 0 and min(mh.shape) > 0:
+    np.maximum(mh, mg * k, out=mh)
+  return heatmap
+
+
 def draw_dense_reg(regmap, heatmap, center, value, radius, is_offset=False):
   diameter = 2 * radius + 1
   gaussian = gaussian2D((diameter, diameter), sigma=diameter / 6)

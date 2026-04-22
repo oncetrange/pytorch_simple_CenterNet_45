@@ -29,23 +29,26 @@ def _neg_loss_slow(preds, targets):
   return loss
 
 
-def _neg_loss(preds, targets):
+def _neg_loss(preds, targets, alpha=2, beta=2, gamma=4):
   ''' Modified focal loss. Exactly the same as CornerNet.
       Runs faster and costs a little bit more memory
       Arguments:
       preds (B x c x h x w)
       gt_regr (B x c x h x w)
+      alpha: modulating factor for positive samples (default 2, from CornerNet)
+      beta:  modulating factor for negative samples (default 2, from CornerNet)
+      gamma: exponent for Gaussian soft-label weighting of negatives (default 4, from CornerNet)
   '''
   pos_inds = targets.eq(1).float()
   neg_inds = targets.lt(1).float()
 
-  neg_weights = torch.pow(1 - targets, 4)
+  neg_weights = torch.pow(1 - targets, gamma)
 
   loss = 0
   for pred in preds:
     pred = torch.clamp(torch.sigmoid(pred), min=1e-4, max=1 - 1e-4)
-    pos_loss = torch.log(pred) * torch.pow(1 - pred, 2) * pos_inds
-    neg_loss = torch.log(1 - pred) * torch.pow(pred, 2) * neg_weights * neg_inds
+    pos_loss = torch.log(pred) * torch.pow(1 - pred, alpha) * pos_inds
+    neg_loss = torch.log(1 - pred) * torch.pow(pred, beta) * neg_weights * neg_inds
 
     num_pos = pos_inds.float().sum()
     pos_loss = pos_loss.sum()
