@@ -51,6 +51,8 @@ parser.add_argument('--num_epochs', type=int, default=140)
 parser.add_argument('--test_topk', type=int, default=100)
 
 parser.add_argument('--log_interval', type=int, default=100)
+parser.add_argument('--resume', action='store_true',
+                    help='从 ckpt_dir/resume.t7 断点续训（恢复 epoch、model、optimizer、lr_scheduler）')
 parser.add_argument('--val_interval', type=int, default=5)
 parser.add_argument('--num_workers', type=int, default=2)
 
@@ -148,6 +150,19 @@ def main():
   optimizer = torch.optim.Adam(model.parameters(), cfg.lr)
   lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, cfg.lr_step, gamma=0.1)
 
+  start_epoch = 1
+  if cfg.resume:
+    resume_path = os.path.join(cfg.ckpt_dir, 'resume.t7')
+    if os.path.isfile(resume_path):
+      ckpt = torch.load(resume_path, map_location=cfg.device)
+      start_epoch = ckpt['epoch'] + 1
+      model.module.load_state_dict(ckpt['state_dict'])
+      optimizer.load_state_dict(ckpt['optimizer'])
+      lr_scheduler.load_state_dict(ckpt['lr_scheduler'])
+      print('Resumed from epoch %d, next epoch: %d' % (ckpt['epoch'], start_epoch))
+    else:
+      print('Resume checkpoint not found at %s, training from scratch.' % resume_path)
+
   def train(epoch):
     print('\n Epoch: %d' % epoch)
     model.train()
@@ -239,12 +254,18 @@ def main():
     summary_writer.add_scalar('val_mAP/mAP', eval_results[0], epoch)
 
   print('Starting training...')
-  for epoch in range(1, cfg.num_epochs + 1):
+  for epoch in range(start_epoch, cfg.num_epochs + 1):
     train_sampler.set_epoch(epoch)
     train(epoch)
     if cfg.val_interval > 0 and epoch % cfg.val_interval == 0:
       val_map(epoch)
     print(saver.save(model.module.state_dict(), 'checkpoint'))
+    if cfg.local_rank == 0:
+      torch.save({'epoch': epoch,
+                  'state_dict': model.module.state_dict(),
+                  'optimizer': optimizer.state_dict(),
+                  'lr_scheduler': lr_scheduler.state_dict()},
+                 os.path.join(cfg.ckpt_dir, 'resume.t7'))
     lr_scheduler.step(epoch)  # move to here after pytorch1.1.0
 
   summary_writer.close()
