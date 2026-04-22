@@ -103,23 +103,22 @@ def main():
     dist.init_process_group(backend='nccl', init_method='env://',
                             world_size=num_gpus, rank=cfg.local_rank)
   else:
-    cfg.device = torch.device('cuda')
+    cfg.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
   print('Setting up data...')
   Dataset = COCO if cfg.dataset == 'coco' else PascalVOC
   train_dataset = Dataset(cfg.data_dir, 'train', split_ratio=cfg.split_ratio, img_size=cfg.img_size,
                           gaussian_type=cfg.gaussian_type, sigma_mode=cfg.sigma_mode)
-  train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset,
-                                                                  num_replicas=num_gpus,
-                                                                  rank=cfg.local_rank)
+  train_sampler = torch.utils.data.distributed.DistributedSampler(
+      train_dataset, num_replicas=num_gpus, rank=cfg.local_rank) if cfg.dist else None
   train_loader = torch.utils.data.DataLoader(train_dataset,
                                              batch_size=cfg.batch_size // num_gpus
                                              if cfg.dist else cfg.batch_size,
-                                             shuffle=not cfg.dist,
+                                             shuffle=(train_sampler is None),
                                              num_workers=cfg.num_workers,
                                              pin_memory=True,
                                              drop_last=True,
-                                             sampler=train_sampler if cfg.dist else None)
+                                             sampler=train_sampler)
 
   Dataset_eval = COCO_eval if cfg.dataset == 'coco' else PascalVOC_eval
   val_dataset = Dataset_eval(cfg.data_dir, 'val', test_scales=[1.], test_flip=False)
@@ -255,7 +254,8 @@ def main():
 
   print('Starting training...')
   for epoch in range(start_epoch, cfg.num_epochs + 1):
-    train_sampler.set_epoch(epoch)
+    if train_sampler is not None:
+      train_sampler.set_epoch(epoch)
     train(epoch)
     if cfg.val_interval > 0 and epoch % cfg.val_interval == 0:
       val_map(epoch)
